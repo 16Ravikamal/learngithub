@@ -1,0 +1,327 @@
+import { LightningElement, track, wire } from 'lwc';
+import { refreshApex } from "@salesforce/apex";
+import { ShowToastEvent } from 'lightning/platformShowToastEvent';
+import getMetadata from '@salesforce/apex/CustomMetadataManagerController.getMetadata';
+import getMetadataRecords from '@salesforce/apex/CustomMetadataManagerController.getMetadataRecords';
+import updateRecords from '@salesforce/apex/CustomMetadataManagerController.updateMetadataRecord';
+import createRecords from '@salesforce/apex/CustomMetadataManagerController.createCustomMetadataRecord';
+import getMetadataFieldType from '@salesforce/apex/CustomMetadataManagerController.getMetadataFieldType';
+import getMetadataFieldTypeForEdit from '@salesforce/apex/CustomMetadataManagerController.getMetadataFieldTypeForEdit';
+import deleteMetadataRecords from '@salesforce/apex/CustomMetadataManagerController.deleteMetadataRecords';
+export default class CustomMetadataManager extends LightningElement {
+
+    @track optionsValue = [];
+    showDataTable = false;
+    @track metadataRecords = [];
+    @track columns = [];
+    showNewButton = false;
+    @track dynamicFields = [];
+    @track formData = {}; 
+    @track fieldType;
+    @track error;
+    masterLabel;
+    flag = 0;
+    showSpinner = false;
+    showModalNew = false;
+    showSpinnerNew = false;
+    showSpinnerEdit = false;
+    showModalEdit = false;
+    selectedMetadataType;
+    selectedMetadata;
+    totalRequiredFieldCount = 0;
+
+    connectedCallback() {
+        this.fetchMetadataOptions();
+    }
+
+    // Getting metadata options
+    fetchMetadataOptions() {
+        getMetadata()
+        .then(result => {
+            this.optionsValue = result.map(item => ({
+                label: item.label,
+                value: item.metadataType
+            }));
+            console.log('optionsValue', JSON.stringify(this.optionsValue));
+        })
+        .catch(error => {
+            this.error = error;
+            console.error('Error fetching metadata types:', error);
+        });
+    }
+
+    handleMetadataChange(event) {
+        this.selectedMetadataType = event.detail.value;
+        const selectedOption = this.optionsValue.find(option => option.value === this.selectedMetadataType);
+        this.selectedMetadata = selectedOption ? selectedOption.label : null;
+        console.log('Selected event ===', JSON.stringify(event.detail));
+        console.log('Selected Meata data ', this.selectedMetadataType);
+        console.log('Selected Meata data ===', this.selectedMetadata);  
+        this.showSpinner = true;
+        this.dynamicFields = [];
+        this.flag++;
+        if (this.selectedMetadataType) {
+            this.showNewButton = true;
+        }
+    }
+    
+    @wire(getMetadataRecords, { metadataType: '$selectedMetadataType', flag: '$flag' })
+    wiredMetadataRecords(result){
+        if (result.data) {
+            this.showDataTable = true;
+            this.metadataRecords = result.data;
+            console.log('metadataRecords', JSON.stringify(this.metadataRecords));
+            this.setColumns();
+            this.showSpinner = false;
+        } else if (result.error) {
+            this.error = result.error;
+            this.showSpinner = false;
+            console.error('Error fetching metadata records:', error);
+        }
+    }
+
+    handleNew() {
+        this.showSpinnerNew = true;
+        this.showModalNew = true;
+        this.prepareDynamicFields();    
+    }
+
+    closeModal() {
+        this.showSpinner = false;
+        this.showModalNew = false;
+        this.showSpinnerNew = false;
+        this.showSpinnerEdit = false;
+        this.formData = {};
+        this.showModalEdit = false;
+        this.dynamicFields = [];
+        this.totalRequiredFieldCount = 0;
+    }
+    
+    prepareDynamicFields() {
+        getMetadataFieldType({ metadataType: this.selectedMetadataType })
+        .then((data) => {
+            console.log('meta data all Fields:', JSON.stringify(data));
+            this.dynamicFields = data.map(field => {
+                this.totalRequiredFieldCount++;
+                if(field.dataType === 'BOOLEAN'){
+                    this.fieldType = 'checkbox';
+                    this.totalRequiredFieldCount--;
+                }else if(field.dataType === 'STRING'){
+                    this.fieldType = 'text';
+                }else {
+                    this.fieldType = field.dataType.toLowerCase();
+                }
+                return {
+                    label: field.label,
+                    fieldName: field.fieldName,
+                    type: this.fieldType,
+                    isPicklist: this.fieldType === 'picklist' ? true : false,
+                    picklistOptions: field.picklistOptions,
+                    isRequired: this.fieldType === 'checkbox' ? false : true
+                };
+            });
+            this.showSpinnerNew = false;
+            console.log('Dynamic Fields:', JSON.stringify(this.dynamicFields));
+        })
+        .catch((error) => {
+            console.error('Error fetching metadata field types:', error);
+        });
+    }
+
+    handleFieldChange(event) {
+        const fieldName = event.target.name;
+        const fieldValue = event.target.type === 'checkbox' ? event.target.checked : event.target.value;
+        console.log('Field changed: $',fieldName, 'New Value: $',fieldValue);   
+        this.formData[fieldName] = fieldValue;   
+        console.log('formData:', JSON.stringify(this.formData));
+    }
+
+    saveRecord() {
+        console.log('total FieldCount',this.totalRequiredFieldCount);
+        if (Object.keys(this.formData).length < this.totalRequiredFieldCount) {
+            this.showSuccessToast('Error', 'Please add required field value before saving.', 'error');
+            return;
+        }
+        this.showSpinner = true;
+        console.log('form Data size=====',Object.keys(this.formData).length);
+        createRecords({ recordsJson: JSON.stringify(this.formData), metadataType: this.selectedMetadataType })
+        .then(() => {
+            this.metadataRecords = [];
+            setTimeout(() => {
+                console.log('this.flag',this.flag);
+                //this.flag  = this.flag ? false : true;
+                this.flag++;
+                console.log('this.flag2',this.flag);
+                
+            }, 2000);
+            this.showSuccessToast('Success', 'Custom Metadata record submitted successfully.', 'success');
+        })
+        .catch(error => {
+            console.error('Error creating metadata record:', error);
+            this.showSuccessToast('Error', 'Error to crating metadata record', 'error');
+        });
+        this.formData = {}; 
+        this.showModalNew = false;
+        this.totalRequiredFieldCount = 0;
+    }
+  
+    setColumns() {
+        if (this.metadataRecords.length > 0) {
+            const firstRecord = this.metadataRecords[0];
+            this.columns = Object.keys(firstRecord).map(field => {
+                const fieldLabel = field.replace(/__c/, '');
+                return {
+                    label: fieldLabel.replace(/_/g, ' ').toUpperCase(),
+                    fieldName: field,
+                    sortable: true,
+                    //editable: true
+                };
+            });
+            if (this.columns.length > 0) {
+                this.columns.shift();  // Remove the first column (index 0)
+            }
+            this.columns.push({
+                type: 'action',
+                typeAttributes: { rowActions: this.getRowActions }
+            });
+        }
+    }
+
+    getRowActions(row, doneCallback) {
+        const actions = [
+            { label: 'Edit', name: 'edit' },
+            { label: 'Delete', name: 'delete' }
+        ];
+        doneCallback(actions);
+    }
+
+    handleRowAction(event) {
+        const actionName = event.detail.action.name;
+        const row = event.detail.row;
+        this.masterLabel = row.masterlabel;
+        console.log('Row Action ===',actionName, JSON.stringify(row));
+        switch (actionName) {
+            case 'edit':    
+                this.editRecord(row);
+                break;
+            case 'delete':
+                const userConfirmed = confirm(`Are you sure you want to delete ${this.masterLabel} Record?`);
+                if (userConfirmed) {
+                    this.deleteRecord(row);
+                } else {
+                    console.log('Deletion canceled by the user.');
+                }
+                break;
+            default:
+                break;
+        }
+    }
+
+
+    editRecord(row) {
+        this.showSpinnerEdit = true;
+        const metadataType = this.selectedMetadataType;
+        console.log('metadataEditedRecords', JSON.stringify(row));
+        const metadataId = row.id;
+        this.formData.id = metadataId;
+        console.log('metadataType', metadataType);
+        console.log('metadataId', metadataId);
+        getMetadataFieldTypeForEdit({recordId: metadataId, metadataType: this.selectedMetadataType })
+        .then((data) => {
+            console.log('meta data all Fields:', JSON.stringify(data));
+            this.dynamicFields = data.map(field => {
+                if(field.dataType === 'BOOLEAN'){
+                    this.fieldType = 'checkbox';
+                }else if(field.dataType === 'STRING'){
+                    this.fieldType = 'text';
+                }else {
+                    this.fieldType = field.dataType.toLowerCase();
+                }
+                const isChecked = this.fieldType === 'checkbox' ? (field.value === 'true' ? true : false) : false;
+                return {
+                    label: field.label,
+                    fieldName: field.fieldName,
+                    type: this.fieldType,
+                    isPicklist: this.fieldType === 'picklist' ? true : false,
+                    picklistOptions: field.picklistOptions,
+                    value: field.value,
+                    readOnly: field.label === 'Label' ? true : false,
+                    isRequired: this.fieldType === 'checkbox' ? false : field.isRequired,
+                    isChecked:  field.value === 'true' ? true : false
+                };
+            });
+            this.showSpinnerEdit = false;
+            console.log('Dynamic Fields:', JSON.stringify(this.dynamicFields));
+        })
+        .catch((error) => {
+            console.error('Error fetching metadata field types:', error);
+        });
+        this.showModalEdit = true;
+    }
+
+    saveEditedRecord() {
+        console.log('form Data size=====',Object.keys(this.formData).length);
+        if (Object.keys(this.formData).length === 1) {
+            this.showSuccessToast('Error', 'Please modify the field value before saving.', 'error');
+            return;
+        }
+        this.showSpinnerEdit = true;
+        updateRecords({ recordsJson: JSON.stringify(this.formData), metadataType: this.selectedMetadataType })
+        .then(() => {
+            this.metadataRecords = [];
+            this.showSpinnerEdit = false;
+            this.showModalEdit = false;
+            setTimeout(() => {
+                //this.flag  = this.flag ? false : true;
+                this.flag++;
+                console.log('this.flag',this.flag);
+            }, 2000);
+            this.showSuccessToast('Success', 'Custom Metadata record submitted successfully.', 'success');
+        })
+        .catch(error => {
+            console.error('Error updating metadata record:', error);
+            this.showSuccessToast('Error', 'Error to updating metadata record', 'error');
+            this.showSpinnerEdit = false;
+            this.showModalEdit = false;
+        });
+        this.formData = {};
+        this.dynamicFields = [];
+        this.metadataRecords = [];
+    }
+
+
+
+    deleteRecord(row) {
+        console.log('Deleting record:', row);
+        this.showSpinner = true;
+        const masterlabel = row.masterlabel;
+        const metadataId = row.id;
+        console.log('metadataId', metadataId);
+       
+        deleteMetadataRecords({ recordId: metadataId, metadataType: this.selectedMetadataType })
+        .then(() => {
+            this.metadataRecords = [];
+            setTimeout(() => {
+                this.flag++;
+                this.showSpinner = false;
+            }, 2000);
+            this.showSuccessToast('Success', 'Custom Metadata record deleted successfully.', 'success');
+        })
+        .catch(error => {
+            console.error('Error deleting metadata record:', error);
+            this.showSuccessToast('Error', 'Error to deleting metadata record', 'error');
+            this.showSpinner = false;
+
+        });
+    }
+
+    showSuccessToast(title, message, variant) {
+        const event = new ShowToastEvent({
+            title: title,
+            message: message,
+            variant: variant,
+        });
+        this.dispatchEvent(event);
+    }
+ 
+}

@@ -1,0 +1,303 @@
+/**
+ * @description       : 
+ * @author            : ChangeMeIn@UserSettingsUnder.SFDoc
+ * @group             : 
+ * @last modified on  : 12-05-2024
+ * @last modified by  : ChangeMeIn@UserSettingsUnder.SFDoc
+**/
+public without sharing class CustomMetadataManagerController {
+
+    @AuraEnabled(cacheable=true)
+    public static List<Map<String, String>> getMetadata() {
+        List<Map<String, String>> metadataList = new List<Map<String, String>>();
+        List<String> metadataTypes = new List<String>();
+
+        for (String sObjectType : Schema.getGlobalDescribe().keySet()) {
+            if ( sObjectType.endsWith('__mdt') && sObjectType != 'b2b_static_value__mdt') {
+                metadataTypes.add(sObjectType);
+            }
+        }
+
+        for (String metadataType : metadataTypes) {
+            Schema.SObjectType sObjectTypeDescribe = Schema.getGlobalDescribe().get(metadataType);
+            Schema.DescribeSObjectResult describeResult = sObjectTypeDescribe.getDescribe();
+            String label = describeResult.getLabel();
+
+            if(label.toUpperCase().startsWith('B2B')){
+                Map<String, String> metadataWithLabel = new Map<String, String>();
+                metadataWithLabel.put('metadataType', metadataType);
+                metadataWithLabel.put('label', label);
+                metadataList.add(metadataWithLabel);
+            }
+        }
+        return metadataList;
+    }
+
+    @AuraEnabled(cacheable=true)
+    public static List<Map<String, String>> getMetadataRecords(String metadataType, Integer flag) {
+        List<Map<String, String>> metadataRecords = new List<Map<String, String>>();
+        Schema.SObjectType sObjectType = Schema.getGlobalDescribe().get(metadataType);
+        Schema.DescribeSObjectResult describeResult = sObjectType.getDescribe();
+        Map<String, Schema.SObjectField> fieldMap = describeResult.fields.getMap();
+        List<String> fieldNames = new List<String>();
+
+        for (String fieldName : fieldMap.keySet()) {
+            if (fieldName != 'developername' && fieldName != 'language' && fieldName != 'namespaceprefix' && fieldName != 'label' && fieldName != 'qualifiedapiname' && fieldName != 'systemmodstamp' ) {
+                fieldNames.add(fieldName);
+            }
+        }
+
+        String queryString = 'SELECT ' + String.join(fieldNames, ', ') + ' FROM ' + metadataType;
+        List<SObject> records = Database.query(queryString);
+
+        for (SObject record : records) {
+            Map<String, String> recordMap = new Map<String, String>();
+            for (String fieldName : fieldNames) {
+                recordMap.put(fieldName, String.valueOf(record.get(fieldName)));
+            }
+            metadataRecords.add(recordMap);
+        }
+        return metadataRecords;
+    }
+
+    @AuraEnabled
+    public static List<Map<String, Object>> getMetadataFieldType(String metadataType) {
+        List<Map<String, Object>> metadataRecords = new List<Map<String, Object>>();
+        Schema.SObjectType sObjectType = Schema.getGlobalDescribe().get(metadataType);
+        Schema.DescribeSObjectResult describeResult = sObjectType.getDescribe();
+        Map<String, Schema.SObjectField> fieldMap = describeResult.fields.getMap();
+
+        for (String fieldName : fieldMap.keySet()) {
+            if (fieldName != 'Id' && fieldName != 'developername' && fieldName != 'language' 
+                && fieldName != 'namespaceprefix' && fieldName != 'label' && fieldName != 'qualifiedapiname' 
+                && fieldName != 'systemmodstamp') {
+
+                Schema.DescribeFieldResult fieldDescribe = fieldMap.get(fieldName).getDescribe();
+                Boolean isRequired = !fieldDescribe.isNillable() && !fieldDescribe.isCalculated();
+                String fieldLabel = fieldMap.get(fieldName).getDescribe().getLabel();
+                String fieldType = fieldMap.get(fieldName).getDescribe().getType().name();
+
+                Map<String, Object> fieldDetails = new Map<String, Object>();
+                fieldDetails.put('fieldName', fieldName);  
+                fieldDetails.put('label', fieldLabel);
+                fieldDetails.put('dataType', fieldType);
+                fieldDetails.put('isRequired', isRequired);
+
+                if (fieldType == 'PICKLIST') {
+                    List<Schema.PicklistEntry> picklistValues = fieldMap.get(fieldName).getDescribe().getPicklistValues();
+                    List<Map<String, String>> options = new List<Map<String, String>>();
+                    for (Schema.PicklistEntry entry : picklistValues) {
+                        Map<String, String> option = new Map<String, String>();
+                        option.put('label', entry.getLabel());
+                        option.put('value', entry.getValue());
+                        options.add(option);
+                    }
+                    fieldDetails.put('picklistOptions', options);
+                }
+                metadataRecords.add(fieldDetails);
+            }
+        }
+        return metadataRecords;
+    }
+
+    @AuraEnabled
+    public static List<Map<String, Object>> getMetadataFieldTypeForEdit(String recordId, String metadataType) {
+        System.debug('recordsJson: ' + recordId);
+        System.debug('metadataType: ' + metadataType);
+
+        List<Map<String, Object>> metadataRecords = new List<Map<String, Object>>();
+        Schema.SObjectType sObjectType = Schema.getGlobalDescribe().get(metadataType);
+        Schema.DescribeSObjectResult describeResult = sObjectType.getDescribe();
+        Map<String, Schema.SObjectField> fieldMap = describeResult.fields.getMap();
+
+        List<String> fieldNames = new List<String>();
+        for (String fieldName : fieldMap.keySet()) {
+            fieldNames.add(fieldName);
+        }
+
+        String queryString = 'SELECT ' + String.join(fieldNames, ', ') + 
+                            ' FROM ' + metadataType + 
+                            ' WHERE Id = \'' + recordId + '\'' + 
+                            ' LIMIT 1';
+            
+        List<SObject> queryMetadataRecords = Database.query(queryString);
+    
+        SObject metadataRecord = queryMetadataRecords[0];
+
+        for (String fieldName : fieldMap.keySet()) {
+            if (fieldName != 'Id' && fieldName != 'developername' && fieldName != 'language' 
+                && fieldName != 'namespaceprefix' && fieldName != 'label' && fieldName != 'qualifiedapiname' 
+                && fieldName != 'systemmodstamp') {
+
+                Schema.DescribeFieldResult fieldDescribe = fieldMap.get(fieldName).getDescribe();
+                Boolean isRequired = !fieldDescribe.isNillable() && !fieldDescribe.isCalculated();
+                System.debug('Field ' + fieldName + ' is required: ' + isRequired);
+                String fieldLabel = fieldMap.get(fieldName).getDescribe().getLabel();
+                String fieldType = fieldMap.get(fieldName).getDescribe().getType().name();
+                String fieldValue = String.valueOf(metadataRecord.get(fieldName));
+
+                Map<String, Object> fieldDetails = new Map<String, Object>();
+                fieldDetails.put('fieldName', fieldName);  
+                fieldDetails.put('label', fieldLabel);
+                fieldDetails.put('dataType', fieldType);
+                fieldDetails.put('value', fieldValue);
+                fieldDetails.put('isRequired', isRequired);
+
+                if (fieldType == 'PICKLIST') {
+                    List<Schema.PicklistEntry> picklistValues = fieldMap.get(fieldName).getDescribe().getPicklistValues();
+                    List<Map<String, String>> options = new List<Map<String, String>>();
+                    for (Schema.PicklistEntry entry : picklistValues) {
+                       Map<String, String> option = new Map<String, String>();
+                       option.put('label', entry.getLabel());
+                       option.put('value', entry.getValue());
+                       options.add(option);
+                    }
+                   fieldDetails.put('picklistOptions', options);
+                } 
+                metadataRecords.add(fieldDetails);
+            }
+        }
+        return metadataRecords;
+    }
+
+    @AuraEnabled
+    public static void createCustomMetadataRecord(String metadataType, String recordsJson) {
+        System.debug('metadataType====='+metadataType);
+        System.debug('recordsJson======'+recordsJson);
+        // List<Map<String, String>> recordsToUpdate = (List<Map<String, String>>) JSON.deserialize(recordsJson, List<Map<String, String>>
+        try {
+            Schema.SObjectType sObjectType = Schema.getGlobalDescribe().get(metadataType);
+            Schema.DescribeSObjectResult describeResult = sObjectType.getDescribe();
+            Map<String, Schema.SObjectField> fieldMap = describeResult.fields.getMap();
+
+            Map<String, String> fieldsMap = (Map<String, String>) JSON.deserialize(recordsJson, Map<String, String>.class); 
+            Metadata.DeployContainer mdContainer = new Metadata.DeployContainer();
+        
+            Metadata.CustomMetadata metadataInstance = new Metadata.CustomMetadata();
+            string masterLabel = fieldsMap.get('masterlabel');
+            string devName = masterLabel.replaceAll(' ', '_');
+            String fullName = metadataType + '.' + devName;
+            System.debug('fullName-------'+fullName);
+            metadataInstance.fullName = fullName;
+            System.debug('masterlabel'+ fieldsMap.get('masterlabel'));
+            metadataInstance.label = fieldsMap.get('masterlabel');
+        
+            for (String fieldName : fieldsMap.keySet()) {
+                System.debug('fieldName====='+fieldName);
+                String fieldType = fieldMap.get(fieldName).getDescribe().getType().name();
+
+                if (fieldName != 'masterlabel') {  
+                    //String fieldValue = fieldsMap.get(fieldName);
+                    Metadata.CustomMetadataValue customField = new Metadata.CustomMetadataValue();
+                    customField.field = fieldName;
+                    if(fieldType == 'DATE' || fieldType == 'DATETIME'){
+                        customField.value = Date.valueOf((String) fieldsMap.get(fieldName));
+                    }else if(fieldType == 'BOOLEAN'){
+                        customField.value = Boolean.valueOf(fieldsMap.get(fieldName));
+                    }else {
+                        customField.value = (String) fieldsMap.get(fieldName);
+                    }
+                    metadataInstance.values.add(customField);
+                }
+            }
+            mdContainer.addMetadata(metadataInstance);
+            Id jobId = Metadata.Operations.enqueueDeployment(mdContainer, null);
+            System.debug('Job ID for deployment: ' + jobId);
+        } catch (Exception e) {
+            System.debug('Error creating custom metadata record: ' + e.getMessage());
+        }
+    }
+
+    @AuraEnabled
+    public static void updateMetadataRecord(String recordsJson, String metadataType) {
+        System.debug('metadataType====='+metadataType);
+        System.debug('recordsJson======'+recordsJson);
+        try {
+            Schema.SObjectType sObjectType = Schema.getGlobalDescribe().get(metadataType);
+            Schema.DescribeSObjectResult describeResult = sObjectType.getDescribe();
+            Map<String, Schema.SObjectField> fieldMap = describeResult.fields.getMap();
+    
+            List<String> fieldNames = new List<String>();
+            for (String fieldName : fieldMap.keySet()) {
+                fieldNames.add(fieldName);
+            }
+            Map<String, Object> resultMap = (Map<String, Object>) JSON.deserializeUntyped(recordsJson);
+            Metadata.DeployContainer mdContainer = new Metadata.DeployContainer();
+            String recordId = (String) resultMap.get('id');
+
+            String queryString = 'SELECT ' + String.join(fieldNames, ', ') + 
+                                ' FROM ' + metadataType + 
+                                ' WHERE Id = \'' + recordId + '\'' + 
+                                ' LIMIT 1';
+    
+            List<SObject> metadataRecords = Database.query(queryString);
+    
+            SObject metadataRecord = metadataRecords[0];
+            String developerName = (String) metadataRecord.get('DeveloperName');
+            String masterLabel = (String) metadataRecord.get('MasterLabel');
+    
+            Metadata.CustomMetadata metadataRec = new Metadata.CustomMetadata();
+            metadataRec.fullName = metadataType + '.' + developerName;
+            metadataRec.label = masterLabel;
+
+            for (String fieldName : resultMap.keySet()) {
+    
+                if (fieldName != 'id' && fieldName != 'MasterLabel') {
+                    //String fieldValue = (String) resultMap.get(fieldName);
+                    String fieldType = fieldMap.get(fieldName).getDescribe().getType().name();
+                    System.debug('fieldType==='+fieldType);
+
+                    Metadata.CustomMetadataValue fieldUpdate = new Metadata.CustomMetadataValue();
+                    fieldUpdate.field = fieldName;
+                    //fieldUpdate.value = fieldValue;
+                    if(fieldType == 'DATE' || fieldType == 'DATETIME'){
+                        fieldUpdate.value = Date.valueOf((String) resultMap.get(fieldName));
+                    }else if(fieldType == 'BOOLEAN'){
+                        fieldUpdate.value = Boolean.valueOf(resultMap.get(fieldName));
+                    }else {
+                        fieldUpdate.value = (String) resultMap.get(fieldName);
+                    }
+                    metadataRec.values.add(fieldUpdate);
+                }
+            }
+            mdContainer.addMetadata(metadataRec);
+            Metadata.Operations.enqueueDeployment(mdContainer, null);
+            System.debug('Metadata update deployment queued successfully.');
+        } catch (Exception e) {
+            System.debug('Error: ' + e.getMessage());
+        }
+    }
+
+    @AuraEnabled
+    public static void deleteMetadataRecords(String recordId, String metadataType) {
+
+        String queryString = 'SELECT Id, DeveloperName' + 
+                            ' FROM ' + metadataType + 
+                            ' WHERE Id = \'' + recordId + '\'' + 
+                            ' LIMIT 1';
+            
+        List<SObject> queryMetadataRecords = Database.query(queryString);
+    
+        SObject metadataRecord = queryMetadataRecords[0];
+        String developerName = String.valueOf(metadataRecord.get('DeveloperName'));
+        String sessionId = UserInfo.getOrganizationId().substring(0, 15) + '' + UserInfo.getSessionId().substring(15);
+        deleteMetadataRecordsAsync(developerName, metadataType, sessionId);
+    } 
+
+    @future (callout=true)
+    public static void deleteMetadataRecordsAsync(String developerName, String metadataType, String sessionId) {
+
+        MetadataService.MetadataPort service = new MetadataService.MetadataPort();
+        List<String> recordsToDelete = new List<String>();
+        recordsToDelete.add(metadataType + '.' + developerName);
+        System.debug('recordsToDelete: ' + recordsToDelete);
+        service.SessionHeader = new MetadataService.SessionHeader_element();
+        service.SessionHeader.sessionId = sessionId;
+        service.SessionHeader.sessionId = UserInfo.getOrganizationId().substring(0, 15) + '' + UserInfo.getSessionId().substring(15);
+        try {
+            service.deleteMetadata('CustomMetadata', recordsToDelete);
+        } catch (Exception e) {
+            System.debug('Error in deleteMetadataRecords: ' + e.getMessage());
+        }
+    }     
+}
